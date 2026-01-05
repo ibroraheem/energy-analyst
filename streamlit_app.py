@@ -42,19 +42,32 @@ if uploaded_file:
         if time_col and watt_col:
             # Standardize Time with Robust Parsing
             # Handle Unix Timestamps (Seconds/Millis) often found in loggers
-            if pd.api.types.is_numeric_dtype(df[time_col]):
-                first_val = df[time_col].iloc[0]
-                # Unix seconds for year 2000 is ~9.4e8.
-                # Unix millis for year 2000 is ~9.4e11.
-                # If value is > 3e10 (year 2920 in seconds), it's likely bigger than seconds (ms, ns).
-                if first_val > 1e12: # Likely Milliseconds
-                    df[time_col] = pd.to_datetime(df[time_col], unit='ms')
-                elif first_val > 1e9: # Likely Seconds (common for loggers)
-                    df[time_col] = pd.to_datetime(df[time_col], unit='s')
+                # Handle Unix Timestamps (Seconds/Millis/Deciseconds)
+                if pd.api.types.is_numeric_dtype(df[time_col]):
+                    try:
+                        first_val = df[time_col].iloc[0]
+                        
+                        # Heuristics for Year 2000-2100 roughly
+                        # Seconds: ~9e8 to ~4e9
+                        # Millis:  ~9e11 to ~4e12
+                        # Decis:   ~9e9 to ~4e10 (11 digits, e.g. 17262860300)
+                        
+                        if first_val > 1e12: # Milliseconds (13 digits usually)
+                            df[time_col] = pd.to_datetime(df[time_col], unit='ms')
+                        elif first_val > 3e10: # Likely Microseconds if massive, but let's assume ms fallback or error
+                             # Fallback: Try ms, if fails, it's weird data
+                             df[time_col] = pd.to_datetime(df[time_col], unit='ms')
+                        elif first_val > 5e9: # 1.7e10 falls here -> Deciseconds (1/10s)
+                             # 11 digits approx. Convert to seconds.
+                             df[time_col] = pd.to_datetime(df[time_col] / 10, unit='s')
+                        else: # Standard Seconds
+                            df[time_col] = pd.to_datetime(df[time_col], unit='s')
+                            
+                    except Exception as e:
+                        st.warning(f"Timestamp conversion warning: {e}. Trying standard parsing.")
+                        df[time_col] = pd.to_datetime(df[time_col])
                 else:
                     df[time_col] = pd.to_datetime(df[time_col])
-            else:
-                df[time_col] = pd.to_datetime(df[time_col])
 
             df = df.sort_values(time_col)
             
