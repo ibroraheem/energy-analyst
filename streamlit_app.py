@@ -41,35 +41,51 @@ if uploaded_file:
 
         if time_col and watt_col:
             # Standardize Time with Robust Parsing
-            # Handle Unix Timestamps (Seconds/Millis) often found in loggers
-            # Handle Unix Timestamps (Seconds/Millis/Deciseconds)
-            if pd.api.types.is_numeric_dtype(df[time_col]):
+            # Hybrid Approach: Check if it looks like Numbers (Unix) or Strings (Dates)
+            
+            # 1. Try to convert to numeric, but keep original if it fails completely
+            df_temp_numeric = pd.to_numeric(df[time_col], errors='coerce')
+            
+            # Check if we have valid numbers (at least 50% valid to be safe, or just non-empty)
+            valid_numeric_count = df_temp_numeric.count()
+            total_count = len(df)
+            
+            if valid_numeric_count > 0 and (valid_numeric_count / total_count > 0.5):
+                # CASE A: It is numeric (Unix Timestamps)
+                # Use the numeric version
+                df[time_col] = df_temp_numeric.dropna()
+                df = df.dropna(subset=[time_col]) # Drop invalid rows
+                
                 try:
                     first_val = df[time_col].iloc[0]
-                    
-                    # Heuristics for Year 2000-2100 roughly
-                    # Seconds: ~9e8 to ~4e9
-                    # Millis:  ~9e11 to ~4e12
-                    # Decis:   ~9e9 to ~4e10 (11 digits, e.g. 17262860300)
-                    
-                    if first_val > 1e12: # Milliseconds (13 digits usually)
-                        df[time_col] = pd.to_datetime(df[time_col], unit='ms')
-                    elif first_val > 3e10: # Likely Microseconds if massive, but let's assume ms fallback or error
-                            # Fallback: Try ms, if fails, it's weird data
-                            df[time_col] = pd.to_datetime(df[time_col], unit='ms')
-                    elif first_val > 5e9: # 1.7e10 falls here -> Deciseconds (1/10s)
-                            # 11 digits approx. Convert to seconds.
-                            df[time_col] = pd.to_datetime(df[time_col] / 10, unit='s')
-                    else: # Standard Seconds
-                        df[time_col] = pd.to_datetime(df[time_col], unit='s')
-                        
+                    # Unix Timestamp Heuristics
+                    if first_val > 1e12: # Milliseconds (13 digits)
+                         df[time_col] = pd.to_datetime(df[time_col], unit='ms')
+                    elif first_val > 5e9: # Deciseconds (11 digits, ~1.7e10) -> Convert to Seconds
+                         df[time_col] = pd.to_datetime(df[time_col] / 10, unit='s')
+                    else: # Seconds (10 digits)
+                         df[time_col] = pd.to_datetime(df[time_col], unit='s')
                 except Exception as e:
-                    st.warning(f"Timestamp conversion warning: {e}. Trying standard parsing.")
+                    st.warning(f"Numeric timestamp error: {e}. Fallback to standard.")
                     df[time_col] = pd.to_datetime(df[time_col])
             else:
-                df[time_col] = pd.to_datetime(df[time_col])
+                # CASE B: It is likely String Dates (e.g. "2024-01-01 12:00")
+                # Use standard string parsing on the ORIGINAL column
+                # Attempt to parse 'dayfirst' for international formats like DD/MM/YYYY
+                try:
+                     df[time_col] = pd.to_datetime(df[time_col], dayfirst=True)
+                except:
+                     df[time_col] = pd.to_datetime(df[time_col]) # Fallback
+            
+            # Clean invalid dates
+            df = df.dropna(subset=[time_col])
 
             df = df.sort_values(time_col)
+            
+            # Ensure Watt/Power column is Numeric (handle strings/errors)
+            df[watt_col] = pd.to_numeric(df[watt_col], errors='coerce')
+            df = df.dropna(subset=[watt_col]) # Drop rows where Power is invalid
+
             
             # Robust Interval Detection
             if len(df) > 1:
