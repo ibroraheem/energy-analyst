@@ -106,6 +106,9 @@ if uploaded_file:
             if interval_min < 1.0:
                 analysis_method = "Time-Weighted Average"
                 # Use MEAN for high frequency
+            if interval_min < 1.0:
+                analysis_method = "Time-Weighted Average"
+                # Use MEAN for high frequency
                 hourly_df = df.set_index(time_col).resample('H')[watt_col].mean().reset_index()
                 hourly_df['Power (kW)'] = hourly_df[watt_col] / 1000
                 col_name_w = "Avg Power (W)"
@@ -113,12 +116,24 @@ if uploaded_file:
                 st.info(f"ℹ️ **Smart Analysis**: Detected High Frequency data ({interval_min:.2f} min). Using **{analysis_method}**.")
             else:
                 analysis_method = "Hourly Summation"
-                # Use SUM for standard/low frequency (Matches Denmark Reference)
-                hourly_df = df.set_index(time_col).resample('H')[watt_col].sum().reset_index()
+                # Use SUM for standard/low frequency using min_count=1 to detect Gaps vs Zeros
+                hourly_df = df.set_index(time_col).resample('H')[watt_col].sum(min_count=1).reset_index()
                 hourly_df['Power (kW)'] = hourly_df[watt_col] / 1000
                 col_name_w = "Power (Sum W)"
                 col_name_kw = "Power (Sum kW)"
-                st.success(f"✅ **Smart Analysis**: Detected Standard data ({interval_min:.2f} min). Using **{analysis_method}** (Matches Reference).")
+                st.success(f"✅ **Smart Analysis**: Detected Standard data ({interval_min:.2f} min). Using **{analysis_method}**.")
+
+            # Filter out empty hours (NaNs) created by resampling gaps
+            before_len = len(hourly_df)
+            hourly_df = hourly_df.dropna(subset=[watt_col])
+            after_len = len(hourly_df)
+            
+            if before_len - after_len > 100:
+                st.warning(f"⚠️ Note: Removed {before_len - after_len} empty hours (gaps in data) to optimize report.")
+            
+            if len(hourly_df) > 8760: # More than 1 year of hours
+                st.warning(f"⚠️ Large Data Detected: {len(hourly_df)} hours. Excel generation may take a moment.")
+
 
             # Common Columns
             hourly_df['Day'] = hourly_df[time_col].dt.day
@@ -148,6 +163,11 @@ if uploaded_file:
             for col, header in enumerate(headers):
                 worksheet.write(start_row, col, header, header_fmt)
             
+            # Progress Bar for Large Files
+            progress_text = "Generating Excel Formulas..."
+            my_bar = st.progress(0, text=progress_text)
+            total_rows = len(df)
+            
             # Write Raw Data
             for i, (ts_val, watt_val) in enumerate(zip(df[time_col], df[watt_col])):
                 excel_row = start_row + 1 + i
@@ -158,11 +178,20 @@ if uploaded_file:
                 worksheet.write_number(excel_row, 1, watt_val, num_fmt)
                 worksheet.write_formula(excel_row, 2, f"=B{row_str}/1000", num_fmt)
                 worksheet.write_formula(excel_row, 3, f"=C{row_str}*({interval_min}/60)", num_fmt)
+                
+                # Update progress every 5%
+                step_size = max(1, total_rows // 20)
+                if i % step_size == 0:
+                     # Scale Raw Data phase to 0-80% of total bar
+                     progress_percent = min(80, int((i / total_rows) * 80))
+                     my_bar.progress(progress_percent, text=f"{progress_text} ({progress_percent}%)")
             
             worksheet.set_column(0, 0, 22)
             worksheet.set_column(1, 3, 15)
 
             # --- Sheet 2: Analyzed (with Formulas referencing Sheet 1) ---
+            my_bar.progress(85, text="Generating Analysis Sheet...")
+            
             ws_analyzed = workbook.add_worksheet("Analyzed")
             analyzed_headers = ["Date & Time", "Day", "Hour", col_name_w, col_name_kw]
             
@@ -182,10 +211,6 @@ if uploaded_file:
                 ws_analyzed.write_number(row_idx, 2, hour)
                 
                 # FORMULA LOGIC based on Analysis Method
-                # Reference range: 'Raw Data'!A:A (Times), 'Raw Data'!B:B (Watts)
-                # A2 in Analyzed is the start time.
-                # End time is A2 + 1 hour (1/24 in Excel serial date format).
-                
                 range_time = "'Raw Data'!$A:$A"
                 range_watt = "'Raw Data'!$B:$B"
                 
@@ -193,35 +218,40 @@ if uploaded_file:
                 end_crit = f'"<"&A{row_str}+(1/24)' # < Hourly Timestamp + 1 Hour
                 
                 if analysis_method == "Hourly Summation":
-                    # =SUMIFS(Watts, Times, ">=Start", Times, "<End")
                     formula = f'=SUMIFS({range_watt}, {range_time}, {start_crit}, {range_time}, {end_crit})'
                 else:
-                    # =AVERAGEIFS(Watts, Times, ">=Start", Times, "<End")
                     formula = f'=AVERAGEIFS({range_watt}, {range_time}, {start_crit}, {range_time}, {end_crit})'
                 
                 ws_analyzed.write_formula(row_idx, 3, formula, num_fmt)
-                
-                # kW Formula (referencing the calculated W column in this sheet)
-                # =D2/1000
                 ws_analyzed.write_formula(row_idx, 4, f"=D{row_str}/1000", num_fmt)
-
+            
             ws_analyzed.set_column(0, 0, 22)
             ws_analyzed.set_column(1, 4, 18)
 
             # --- Add Native Excel Chart ---
-            chart = workbook.add_chart({'type': 'line'})
-            chart.add_series({
-                'name':       f'Hourly Load ({analysis_method})',
-                'categories': ['Analyzed', 1, 0, num_rows, 0], # Timestamp column
-                'values':     ['Analyzed', 1, 4, num_rows, 4], # Power kW column
-                'line':       {'color': '#008000', 'width': 2.25},
-            })
-            chart.set_title({'name': 'Site Load Profile'})
-            chart.set_x_axis({'name': 'Time', 'date_axis': True})
-            chart.set_y_axis({'name': 'Power (kW)'})
-            ws_analyzed.insert_chart('G2', chart)
+            my_bar.progress(90, text="Adding Charts & Finalizing...")
+            
+            if num_rows > 0:
+                try:
+                    chart = workbook.add_chart({'type': 'line'})
+                    chart.add_series({
+                        'name':       f'Hourly Load ({analysis_method})',
+                        'categories': ['Analyzed', 1, 0, num_rows, 0], # Timestamp column
+                        'values':     ['Analyzed', 1, 4, num_rows, 4], # Power kW column
+                        'line':       {'color': '#008000', 'width': 2.25},
+                    })
+                    chart.set_title({'name': 'Site Load Profile'})
+                    chart.set_x_axis({'name': 'Time', 'date_axis': True})
+                    chart.set_y_axis({'name': 'Power (kW)'})
+                    ws_analyzed.insert_chart('G2', chart)
+                except Exception as e:
+                    st.warning(f"Could not add chart to Excel: {e}")
 
-            workbook.close()
+            try:
+                workbook.close()
+                my_bar.progress(100, text="Excel Generation Complete!")
+            except Exception as e:
+                st.error(f"Error saving Excel file: {e}")
             
             # 5. UI DISPLAY & DOWNLOADS
             col1, col2 = st.columns(2)
@@ -231,6 +261,7 @@ if uploaded_file:
                     data=output_excel.getvalue(),
                     file_name="Analyzed_Energy_Data.xlsx",
                     mime="application/vnd.ms-excel"
+
                 )
                 
             # 6. AI REPORT TRIGGER
