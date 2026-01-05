@@ -1,0 +1,8 @@
+streamlit
+pandas
+google-generativeai
+python-docx
+xlsxwriter
+openpyxl
+matplotlib
+seaborn
