@@ -329,20 +329,30 @@ if uploaded_file:
                         else:
                             pf_str = "N/A (Not Logged)"
 
+
+                        # Solar Window Check (9am - 4pm)
+                        peak_hour = peak_time.hour
+                        in_solar_window = 9 <= peak_hour <= 16
+                        solar_status = "INSIDE Solar Generation Window (9am-4pm)" if in_solar_window else "OUTSIDE Solar Generation Window"
+
                         # Prepare AI Prompt (Text Only)
                         prompt = f"""
                         Act as a Senior Solar Engineer. Write a technical site assessment report text.
                         
                         **Data Context**:
-                        - Max Peak: {peak_val:.2f} kW
+                        - Max Peak: {peak_val:.2f} kW at {peak_time}
+                        - Peak Timing Constraint: {solar_status}
                         - Base Load: {base_load_kw:.2f} kW
                         - Analysis Type: {analysis_method}
                         
                         **Instructions**:
                         1. Write STRICTLY in plain text paragraphs. No Markdown.
                         2. **Executive Technical Summary**: Start with a dense summary of the load characteristics.
-                        3. **Profile Analysis**: Describe the daily usage pattern (Day vs Night, Peak Timing).
-                        4. **Recommendations**: Implication for storage (Base Load coverage) and Inverter sizing.
+                        3. **Profile Analysis**: Describe the daily usage pattern. Analyize the correlation between the Peak Load timing and the Solar Generation Window. 
+                           - State clearly if the peak allows for direct solar self-consumption.
+                        4. **Observations**: detailed implications of the load timing on system reliance (Grid vs Battery).
+                        
+                        **CRITICAL**: Do NOT include a "Recommendations" section. Do NOT recommend specific equipment sizes. Limit to technical observations only.
                         
                         (Do NOT generate a table.)
                         """
