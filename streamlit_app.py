@@ -321,6 +321,11 @@ if uploaded_file:
                         # Base Load (Global 5th Percentile for robustness)
                         base_load_kw = hourly_df['Power (kW)'].quantile(0.05)
                         
+                        # Average Daily Energy (kWh)
+                        total_energy_kwh = hourly_df['Power (kW)'].sum()
+                        time_span_days = (hourly_df[time_col].max() - hourly_df[time_col].min()).total_seconds() / 86400
+                        avg_daily_kwh = total_energy_kwh / max(time_span_days, 1.0)
+
                         # Power Factor
                         pf_col = next((c for c in df.columns if 'pf' in c or 'factor' in c or 'cos' in c), None)
                         if pf_col:
@@ -343,6 +348,7 @@ if uploaded_file:
                         - Max Peak: {peak_val:.2f} kW at {peak_time}
                         - Peak Timing Constraint: {solar_status}
                         - Base Load: {base_load_kw:.2f} kW
+                        - Avg Daily Energy: {avg_daily_kwh:.2f} kWh
                         - Analysis Type: {analysis_method}
                         
                         **Instructions**:
@@ -358,35 +364,36 @@ if uploaded_file:
                         """
                         
                         try:
-                            # Generate Content (Fallback Safe)
+                            # Generate Content
                             try:
-                                model = genai.GenerativeModel('gemini-3-pro-preview')
-                                response = model.generate_content(prompt)
-                            except:
-                                st.warning("⚠️ Falling back to gemini-3-flash-preview.")
                                 model = genai.GenerativeModel('gemini-3-flash-preview')
                                 response = model.generate_content(prompt)
+                            except Exception as e:
+                                st.error(f"AI Generation Error: {e}")
+                                response = None
                             
-                            # --- BUILD WORD DOC ---
-                            doc = Document()
-                            doc.add_heading('Technical Solar Site Assessment', 0)
-                            
-                            # 1. SUMMARY TABLE
-                            table = doc.add_table(rows=1, cols=2)
-                            table.style = 'Table Grid'
-                            metrics = [
-                                ("Peak Load", f"{peak_val:.2f} kW"),
-                                ("Peak Timestamp", str(peak_time)),
-                                ("Base Load", f"{base_load_kw:.2f} kW"),
-                                ("Avg Power Factor", pf_str),
-                                ("Analysis Method", analysis_method)
-                            ]
-                            for m, v in metrics:
-                                row = table.add_row().cells
-                                row[0].text = m
-                                row[1].text = v
-                            
-                            doc.add_paragraph()
+                            if response:
+                                # --- BUILD WORD DOC ---
+                                doc = Document()
+                                doc.add_heading('Technical Solar Site Assessment', 0)
+                                
+                                # 1. SUMMARY TABLE
+                                table = doc.add_table(rows=1, cols=2)
+                                table.style = 'Table Grid'
+                                metrics = [
+                                    ("Peak Load", f"{peak_val:.2f} kW"),
+                                    ("Peak Timestamp", str(peak_time)),
+                                    ("Base Load", f"{base_load_kw:.2f} kW"),
+                                    ("Avg Daily Energy", f"{avg_daily_kwh:.2f} kWh"),
+                                    ("Avg Power Factor", pf_str),
+                                    ("Analysis Method", analysis_method)
+                                ]
+                                for m, v in metrics:
+                                    row = table.add_row().cells
+                                    row[0].text = m
+                                    row[1].text = v
+                                
+                                doc.add_paragraph()
 
                             # 1.5. LOAD PROFILE TABLE (0-23h)
                             doc.add_heading('Average Hourly Load Profile', level=2)
