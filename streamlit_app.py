@@ -80,6 +80,16 @@ if uploaded_file:
             # Clean invalid dates
             df = df.dropna(subset=[time_col])
 
+            # Filter Outliers (Years < 2000 or > 2030)
+            if not df.empty:
+                df['__year'] = df[time_col].dt.year
+                valid_mask = (df['__year'] >= 2000) & (df['__year'] <= 2030)
+                n_removed = len(df) - valid_mask.sum()
+                if n_removed > 0:
+                     st.warning(f"⚠️ Removed {n_removed} rows with invalid years (e.g. 1970 or >2030) to ensure accurate averages.")
+                     df = df[valid_mask]
+                df = df.drop(columns=['__year'])
+
             df = df.sort_values(time_col)
             
             # Ensure Watt/Power column is Numeric (handle strings/errors)
