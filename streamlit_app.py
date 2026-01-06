@@ -145,6 +145,18 @@ if uploaded_file:
             st.metric("Detected Interval", f"{interval_min:.2f} min")
             st.metric(f"Peak Hourly Load ({analysis_method})", f"{peak_val_kw:.2f} kW")
 
+            # --- NEW: Average Hourly Profile (0-23) ---
+            st.markdown("### 📊 Average Daily Load Profile (0-23h)")
+            # Group by Hour and take the MEAN of the Power (kW) to get the representative profile
+            avg_profile_df = hourly_df.groupby('Hour')['Power (kW)'].mean().reset_index()
+            
+            # Simple Streamlit Chart
+            st.line_chart(avg_profile_df, x='Hour', y='Power (kW)', color='#FF4B4B')
+            
+            # Optional: Show Data Table Expander
+            with st.expander("View 0-23h Profile Data"):
+                st.dataframe(avg_profile_df)
+
             # 4. GENERATE EXCEL WITH FORMULAS (Reference Style)
             output_excel = io.BytesIO()
             workbook = xlsxwriter.Workbook(output_excel)
@@ -228,6 +240,37 @@ if uploaded_file:
             ws_analyzed.set_column(0, 0, 22)
             ws_analyzed.set_column(1, 4, 18)
 
+            # --- Sheet 3: Load Profile (0-23h Average) ---
+            my_bar.progress(88, text="Adding Load Profile Sheet...")
+            ws_profile = workbook.add_worksheet("Load Profile")
+            profile_headers = ["Hour", "Avg Power (kW)"]
+            
+            for col, header in enumerate(profile_headers):
+                ws_profile.write(0, col, header, header_fmt)
+            
+            # Write Data
+            num_rows_profile = len(avg_profile_df)
+            for i, (hour, avg_kw) in enumerate(zip(avg_profile_df['Hour'], avg_profile_df['Power (kW)'])):
+                row_idx = i + 1
+                ws_profile.write_number(row_idx, 0, hour)
+                ws_profile.write_number(row_idx, 1, avg_kw, num_fmt)
+                
+            # Add Chart to Profile Sheet
+            if num_rows_profile > 0:
+                chart_profile = workbook.add_chart({'type': 'line'})
+                chart_profile.add_series({
+                    'name':       'Average Daily Profile',
+                    'categories': ['Load Profile', 1, 0, num_rows_profile, 0], # Hour 0-23
+                    'values':     ['Load Profile', 1, 1, num_rows_profile, 1], # Avg Power
+                    'line':       {'color': '#FF4500', 'width': 2.25},
+                    'marker':     {'type': 'circle', 'size': 5}
+                })
+                chart_profile.set_title({'name': 'Average Daily Load Profile (0-23h)'})
+                chart_profile.set_x_axis({'name': 'Hour of Day', 'min': 0, 'max': 23})
+                chart_profile.set_y_axis({'name': 'Average Power (kW)'})
+                ws_profile.insert_chart('D2', chart_profile)
+
+
             # --- Add Native Excel Chart ---
             my_bar.progress(90, text="Adding Charts & Finalizing...")
             
@@ -307,11 +350,11 @@ if uploaded_file:
                         try:
                             # Generate Content (Fallback Safe)
                             try:
-                                model = genai.GenerativeModel('gemini-2.5-flash')
+                                model = genai.GenerativeModel('gemini-3-pro-preview')
                                 response = model.generate_content(prompt)
                             except:
-                                st.warning("⚠️ Falling back to gemini-1.5-flash.")
-                                model = genai.GenerativeModel('gemini-1.5-flash')
+                                st.warning("⚠️ Falling back to gemini-3-flash-preview.")
+                                model = genai.GenerativeModel('gemini-3-flash-preview')
                                 response = model.generate_content(prompt)
                             
                             # --- BUILD WORD DOC ---
@@ -334,6 +377,25 @@ if uploaded_file:
                                 row[1].text = v
                             
                             doc.add_paragraph()
+
+                            # 1.5. LOAD PROFILE TABLE (0-23h)
+                            doc.add_heading('Average Hourly Load Profile', level=2)
+                            table_profile = doc.add_table(rows=1, cols=2)
+                            table_profile.style = 'Table Grid'
+                            
+                            # Header
+                            hdr_cells = table_profile.rows[0].cells
+                            hdr_cells[0].text = 'Hour'
+                            hdr_cells[1].text = 'Avg Power (kW)'
+                            
+                            # Rows
+                            for index, row_data in avg_profile_df.iterrows():
+                                row = table_profile.add_row().cells
+                                row[0].text = str(int(row_data['Hour']))
+                                row[1].text = f"{row_data['Power (kW)']:.2f}"
+                            
+                            doc.add_paragraph()
+
                             
                             # 2. REPORT TEXT
                             doc.add_heading('Technical Report', level=1)
